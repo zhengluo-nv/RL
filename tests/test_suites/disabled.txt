@@ -13,3 +13,6 @@ tests/test_suites/vlm/vlm_grpo-qwen3.5-35ba3b-geo3k-2n8g-megatron-ep16.sh
 # spare. Move to nightly.txt once a real run confirms it converges and the
 # budget has room.
 tests/test_suites/vlm/vlm_grpo-nemotron-omni-30ba3b-circle-click-2n8g-megatron-tp2ep8.v1.sh
+
+# Enable after the first Nano MMPR MPO CP=1 functional qualification.
+tests/test_suites/vlm/vlm_mpo-nemotron-omni-30ba3b-mmpr-1n8g-megatron-tp8.v1.sh
