@@ -138,6 +138,7 @@ def test_logs_hyperparameters_and_concrete_weight_synchronizer(
         save_state=_initial_grpo_save_state(),
         last_checkpoint_path=None,
         data_plane_checkpoint_metadata=None,
+        bootstrap_fingerprint=None,
     )
     controller_cls = SingleControllerActor.__ray_metadata__.modified_class
 
@@ -196,6 +197,7 @@ def test_logs_setup_timing_metrics(monkeypatch, tmp_path) -> None:
         save_state=_initial_grpo_save_state(),
         last_checkpoint_path=None,
         data_plane_checkpoint_metadata=None,
+        bootstrap_fingerprint=None,
     )
     controller_cls = SingleControllerActor.__ray_metadata__.modified_class
 
@@ -378,6 +380,7 @@ def _train_pump_controller(*, sampler) -> object:
     ctrl._gen = SimpleNamespace(requires_kv_scale_sync=False)
     ctrl._loss_fn = None
     ctrl._dp_client = _NoOpDataPlane()
+    ctrl._data_plane_checkpoint_barrier = DataPlaneCheckpointBarrier()
     ctrl._timer = Timer()
     ctrl._trainer_version = 0
     ctrl._train_steps = 0
