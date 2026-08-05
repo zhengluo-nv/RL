@@ -537,6 +537,10 @@ def test_token_capture_reserves_entire_batch_before_dispatch() -> None:
         "dispatch-10-group-10",
         "dispatch-11-group-11",
     ]
+    # The two completed groups retain their buffer permits. The additional
+    # end-of-epoch probe must return the pre-acquired batch capacity.
+    assert ctrl._buffer_capacity._value == 2
+    assert ctrl._rollout_slots._value == 2
 
 
 def test_token_capture_waits_for_capacity_before_reserving_next_batch() -> None:
