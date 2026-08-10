@@ -345,6 +345,7 @@ class TestSetup:
         mc.async_rl.sampler = CustomSamplerConfig(
             target=f"{__name__}:_CheckpointingCustomSampler"
         )
+
         mc.data_plane.update(
             {
                 "backend": "simple",
@@ -361,6 +362,25 @@ class TestSetup:
         ):
             setup_single_controller(mc, MagicMock(pad_token_id=0))
 
+    def test_allows_trainer_only_checkpointing_without_native_tq(
+        self, patched_factories, tmp_path
+    ):
+        mc = _make_master_config()
+        mc.checkpointing["enabled"] = True
+        mc.checkpointing["checkpoint_dir"] = str(tmp_path / "checkpoints")
+        mc.async_rl.sampler = WindowedSamplerConfig(max_staleness_versions=1)
+        mc.rollout_checkpointing.restore_mode = "none"
+        mc.data_plane.update(
+            {
+                "backend": "simple",
+                "checkpointing_enabled": False,
+            }
+        )
+
+        actor_args, _ = setup_single_controller(mc, MagicMock(pad_token_id=0))
+
+        assert actor_args.last_checkpoint_path is None
+
     def test_rejects_token_capture_checkpointing_without_native_tq(self):
         mc = _make_master_config()
         mc.checkpointing["enabled"] = True
@@ -376,7 +396,7 @@ class TestSetup:
         with pytest.raises(ValueError, match="token-capture checkpointing requires"):
             setup_single_controller(mc, MagicMock(pad_token_id=0))
 
-    def test_rejects_token_capture_recovery_with_gated_sampler(self):
+    def test_rejects_token_capture_recovery_with_nonrestorable_sampler(self):
         mc = _make_master_config()
         mc.checkpointing["enabled"] = True
         mc.token_capture.enabled = True
@@ -400,8 +420,28 @@ class TestSetup:
         mc.token_capture.enabled = True
         mc.async_rl.max_buffered_rollouts = 3
 
+        with pytest.raises(ValueError, match="one dataloader batch can own capacity"):
+            setup_single_controller(mc, MagicMock(pad_token_id=0))
+
+        patched_factories["setup_response_data"].assert_not_called()
+        patched_factories["_build_clusters"].assert_not_called()
+        patched_factories["_build_generation"].assert_not_called()
+        patched_factories["_build_trainer"].assert_not_called()
+
+    def test_rejects_token_capture_recovery_without_capacity_headroom(
+        self, patched_factories
+    ):
+        mc = _make_master_config()
+        mc.checkpointing["enabled"] = True
+        mc.token_capture.enabled = True
+        # A four-group restored population may contain only 1–3 groups. With
+        # capacity four, neither a fresh four-prompt batch nor the trainer's
+        # four-group streaming threshold can make progress.
+        mc.async_rl.max_buffered_rollouts = 4
+
         with pytest.raises(
-            ValueError, match="one dataloader batch can own capacity"
+            ValueError,
+            match=r"num_prompts_per_step \+ .*min_groups_for_streaming_train - 1",
         ):
             setup_single_controller(mc, MagicMock(pad_token_id=0))
 

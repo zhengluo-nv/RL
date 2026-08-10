@@ -1442,6 +1442,10 @@ class RolloutManager:
         worth taking because a shard under memory pressure can return an empty
         generation that looks deterministic and is not.
 
+        The Single Controller uses ``ensure_rollout_group`` directly for
+        token-capture work. This method remains the convenience entry point for
+        native rollouts and direct callers that have not pre-reserved lineage.
+
         Args:
             input_sample: A single prompt (one DatumSpec entry).
             target_step: Training step this rollout targets; stamped on the
@@ -1694,6 +1698,57 @@ class RolloutManager:
             f"{type(last_infra_error).__name__}: {last_infra_error}"
         ) from last_infra_error
 
+    async def ensure_rollout_group(
+        self,
+        input_sample: DatumSpec,
+        *,
+        group_id: str,
+        target_step: Optional[int],
+    ) -> bool:
+        """Make one durable token-capture group training-ready.
+
+        Fresh dataloader dispatch and startup recovery share this entry point.
+        The ledger state decides whether to generate every sibling or reuse
+        sealed receipts and redispatch only missing siblings.
+
+        Returns:
+            True when canonical rows were committed. False when finalizer
+            policy deliberately dropped the group.
+        """
+        if self._recovery_ledger is None or self._finalizer is None:
+            raise RuntimeError("ensuring a rollout group requires token capture")
+        group = self._recovery_ledger.get_group(group_id)
+        if group.prompt_id != str(input_sample["idx"]):
+            raise ValueError(
+                "durable rollout group belongs to a different prompt: "
+                f"group={group.prompt_id!r}, input={str(input_sample['idx'])!r}"
+            )
+        if group.target_step != target_step:
+            raise ValueError(
+                "durable rollout group target step does not match its dispatch: "
+                f"group={group.target_step!r}, dispatch={target_step!r}"
+            )
+
+        statuses = {sibling.current_attempt.status for sibling in group.siblings}
+        if statuses == {RolloutAttemptStatus.RESERVED}:
+            outcome = await self.generate_and_push(
+                input_sample,
+                target_step=target_step,
+                recovery_group_id=group_id,
+            )
+            return outcome is RolloutOutcome.COMMITTED
+        recoverable_statuses = {
+            RolloutAttemptStatus.SEALED,
+            RolloutAttemptStatus.ABANDONED,
+            RolloutAttemptStatus.FAILED,
+        }
+        if statuses <= recoverable_statuses:
+            return await self.recover_group(group_id)
+        raise ValueError(
+            f"durable rollout group {group_id!r} has unsupported dispatch "
+            f"statuses={sorted(status.value for status in statuses)!r}"
+        )
+
     async def _generate_and_finalize_attempt(
         self,
         input_sample: DatumSpec,
@@ -1854,20 +1909,30 @@ class RolloutManager:
             raise RuntimeError("prompt-group recovery requires token capture")
         if self._tq_buffer is None:
             raise RuntimeError("prompt-group recovery requires a TQ replay buffer")
+        if self._data_plane_checkpoint_barrier is None:
+            raise RuntimeError(
+                "prompt-group recovery requires the SC data-plane "
+                "checkpoint barrier"
+            )
 
-        group = self._recovery_ledger.get_group(group_id)
-        generation_indices = self._recovery_ledger.retryable_generation_indices(
-            group_id
-        )
-        for generation_index in generation_indices:
-            self._recovery_ledger.retry_sibling(
-                group_id, generation_index=generation_index
+        # Recovery now overlaps the periodic checkpoint pump. Minting physical
+        # retry attempts and making them dispatchable must therefore be one
+        # ledger mutation; a snapshot sees either the saved attempts or the
+        # complete replacement set, never a half-retried group.
+        async with self._data_plane_checkpoint_barrier.mutation():
+            group = self._recovery_ledger.get_group(group_id)
+            generation_indices = (
+                self._recovery_ledger.retryable_generation_indices(group_id)
             )
-        if generation_indices:
-            self._recovery_ledger.mark_siblings_dispatched(
-                group_id, generation_indices=generation_indices
-            )
-        group = self._recovery_ledger.get_group(group_id)
+            for generation_index in generation_indices:
+                self._recovery_ledger.retry_sibling(
+                    group_id, generation_index=generation_index
+                )
+            if generation_indices:
+                self._recovery_ledger.mark_siblings_dispatched(
+                    group_id, generation_indices=generation_indices
+                )
+            group = self._recovery_ledger.get_group(group_id)
         allowed_statuses = {
             RolloutAttemptStatus.SEALED,
             RolloutAttemptStatus.DISPATCHED,
