@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from types import SimpleNamespace
 from typing import Any
 
@@ -94,6 +95,15 @@ class _RecordingRolloutManager:
         self._buffer.reserve(target_step=target_step)
 
 
+def _make_bare_controller() -> Any:
+    """Build the minimal actor shell shared by rollout-pump unit tests."""
+    controller_cls = SingleControllerActor.__ray_metadata__.modified_class
+    ctrl = object.__new__(controller_cls)
+    ctrl._rollout_completion_durations_s = deque(maxlen=10_000)
+    ctrl._rollout_queue_wait_durations_s = deque(maxlen=10_000)
+    return ctrl
+
+
 @pytest.mark.parametrize(
     ("make_sampler", "expected_target_steps"),
     [
@@ -108,8 +118,7 @@ def test_rollout_pump_stamps_target_steps(
     expected_target_steps: list[int | None],
 ) -> None:
     buffer = _RecordingBuffer()
-    controller_cls = SingleControllerActor.__ray_metadata__.modified_class
-    ctrl = object.__new__(controller_cls)
+    ctrl = _make_bare_controller()
     ctrl._buffer = buffer
     ctrl._async_cfg = SimpleNamespace(
         max_inflight_prompts=2,
@@ -349,8 +358,7 @@ def test_rollout_pump_failure_cancels_sibling_and_releases_capacity() -> None:
 
     async def _main() -> None:
         manager = _FailingRolloutManager()
-        controller_cls = SingleControllerActor.__ray_metadata__.modified_class
-        ctrl = object.__new__(controller_cls)
+        ctrl = _make_bare_controller()
         ctrl._async_cfg = SimpleNamespace(
             max_inflight_prompts=2,
             diagnostics=False,
@@ -430,8 +438,7 @@ def test_rollout_pump_releases_permits_when_child_never_starts(monkeypatch) -> N
     monkeypatch.setattr(asyncio, "TaskGroup", _CancelBeforeStartTaskGroup)
 
     async def _main() -> None:
-        controller_cls = SingleControllerActor.__ray_metadata__.modified_class
-        ctrl = object.__new__(controller_cls)
+        ctrl = _make_bare_controller()
         ctrl._async_cfg = SimpleNamespace(
             max_inflight_prompts=1,
             diagnostics=False,
@@ -504,8 +511,7 @@ def test_token_capture_reserves_entire_batch_before_dispatch() -> None:
             events.append(f"dispatch-{prompt['idx']}-{group_id}")
             return True
 
-    controller_cls = SingleControllerActor.__ray_metadata__.modified_class
-    ctrl = object.__new__(controller_cls)
+    ctrl = _make_bare_controller()
     ctrl._async_cfg = SimpleNamespace(max_inflight_prompts=2, diagnostics=False)
     ctrl._master_config = SimpleNamespace(
         grpo=GRPOConfig.model_construct(
@@ -591,8 +597,7 @@ def test_token_capture_waits_for_capacity_before_reserving_next_batch() -> None:
                 return True
 
         manager = _BlockingRolloutManager()
-        controller_cls = SingleControllerActor.__ray_metadata__.modified_class
-        ctrl = object.__new__(controller_cls)
+        ctrl = _make_bare_controller()
         ctrl._async_cfg = SimpleNamespace(max_inflight_prompts=2, diagnostics=False)
         ctrl._master_config = SimpleNamespace(
             grpo={"max_num_epochs": 1, "num_prompts_per_step": 2},

@@ -81,6 +81,7 @@ def test_rejects_multiple_optimizer_steps_per_rl_step(monkeypatch) -> None:
         env_handles={},
         train_cluster=None,
         inference_cluster=None,
+        rollout_checkpoint_load_metrics=None,
     )
     controller_cls = SingleControllerActor.__ray_metadata__.modified_class
 
@@ -198,6 +199,7 @@ def test_logs_setup_timing_metrics(monkeypatch, tmp_path) -> None:
         last_checkpoint_path=None,
         data_plane_checkpoint_metadata=None,
         bootstrap_fingerprint=None,
+        rollout_checkpoint_load_metrics=None,
     )
     controller_cls = SingleControllerActor.__ray_metadata__.modified_class
 

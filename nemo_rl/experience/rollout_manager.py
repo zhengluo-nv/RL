@@ -16,6 +16,7 @@ import asyncio
 import copy
 import enum
 import json
+import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -1309,6 +1310,13 @@ class RolloutManager:
         # Run-wide, shared across concurrent generate_and_push calls. Safe as a plain
         # int: every caller runs on the SingleController's single event loop.
         self._skipped_prompts: int = 0
+        # Process-local benchmark counters. These are deliberately not
+        # checkpointed: restored work is counted when it is published in the
+        # new process.
+        self._canonical_groups_finalized = 0
+        self._canonical_output_tokens = 0
+        self._recovery_siblings_reused = 0
+        self._recovery_siblings_redispatched = 0
 
     @property
     def stats(self) -> RolloutStats:
@@ -1337,6 +1345,40 @@ class RolloutManager:
             version: Trainer weight version to stamp on future rollout tags.
         """
         self._weight_version = int(version)
+
+    def telemetry_snapshot(self) -> dict[str, int]:
+        """Return cumulative canonical-publication and recovery counters."""
+        return {
+            "canonical_groups_finalized": self._canonical_groups_finalized,
+            "canonical_output_tokens": self._canonical_output_tokens,
+            "recovery_siblings_reused": self._recovery_siblings_reused,
+            "recovery_siblings_redispatched": self._recovery_siblings_redispatched,
+        }
+
+    def _record_canonical_publication(
+        self,
+        output_tokens: int,
+        *,
+        reused: int = 0,
+        redispatched: int = 0,
+    ) -> None:
+        """Record a group only after its canonical TQ commit succeeds."""
+        self._canonical_groups_finalized += 1
+        self._canonical_output_tokens += output_tokens
+        self._recovery_siblings_reused += reused
+        self._recovery_siblings_redispatched += redispatched
+
+    def _record_native_publication(self, record: PromptGroupRecord) -> None:
+        """Estimate canonical native output tokens from rollout metrics."""
+        mean_output_tokens = record.rollout_metrics.get(
+            "mean_gen_tokens_per_sample", 0
+        )
+        output_tokens = 0
+        if isinstance(mean_output_tokens, (int, float)):
+            total_output_tokens = float(mean_output_tokens) * len(record.completions)
+            if math.isfinite(total_output_tokens):
+                output_tokens = max(0, round(total_output_tokens))
+        self._record_canonical_publication(output_tokens)
 
     def reserve_prompt_group(
         self, input_sample: DatumSpec, *, target_step: Optional[int] = None
@@ -1562,6 +1604,7 @@ class RolloutManager:
                             start_weight_version=start_version,
                             end_weight_version=end_version,
                         )
+                        self._record_native_publication(record)
                     elif recover_existing_group:
                         # generate_and_push already owns the infrastructure retry
                         # budget. Run one physical recovery attempt here so retries do
@@ -1833,6 +1876,7 @@ class RolloutManager:
             finalized.group_max_wv,
             staging_keys=finalized.staging_keys,
         )
+        self._record_canonical_publication(finalized.canonical_output_tokens)
 
     async def _fail_capture_rollouts(
         self, group_id: str, rollout_ids: list[str]
@@ -2048,6 +2092,11 @@ class RolloutManager:
                 finalized.group_min_wv,
                 finalized.group_max_wv,
                 staging_keys=finalized.staging_keys,
+            )
+            self._record_canonical_publication(
+                finalized.canonical_output_tokens,
+                reused=group.expected_generations - len(generation_indices),
+                redispatched=len(generation_indices),
             )
         except BaseException:
             if recovery_group_discarded:
