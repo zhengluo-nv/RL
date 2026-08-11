@@ -71,7 +71,10 @@ from nemo_rl.algorithms.grpo import (
 )
 from nemo_rl.algorithms.loss import ClippedPGLossConfig
 from nemo_rl.algorithms.metric_utils import SetupTimingMetrics
-from nemo_rl.algorithms.single_controller import SingleControllerActor
+from nemo_rl.algorithms.single_controller import (
+    RolloutCheckpointSaveResult,
+    SingleControllerActor,
+)
 from nemo_rl.algorithms.single_controller_utils import (
     AsyncRLConfig,
     MasterConfig,
@@ -1599,7 +1602,12 @@ class TestPeriodicRolloutCheckpoint:
         actor, _, _ = self._make_periodic_actor(tmp_path)
         actor._master_config.rollout_checkpointing.interval_s = 0.001
         actor._timeout.last_save_time = 0
-        save = AsyncMock(side_effect=[False, True])
+        save = AsyncMock(
+            side_effect=[
+                RolloutCheckpointSaveResult(False, "train_step_active"),
+                RolloutCheckpointSaveResult(True),
+            ]
+        )
 
         with patch.object(actor, "_save_rollout_checkpoint", new=save):
             asyncio.run(asyncio.wait_for(actor._rollout_checkpoint_pump(), timeout=5))
@@ -1618,11 +1626,13 @@ class TestPeriodicRolloutCheckpoint:
         actor._timeout.last_save_time = 0
         trainer_claimed = asyncio.Event()
 
-        async def _save_after_trainer_claims(*, force: bool) -> bool:
+        async def _save_after_trainer_claims(
+            *, force: bool
+        ) -> RolloutCheckpointSaveResult:
             assert force
             assert actor._timeout.check_save()
             trainer_claimed.set()
-            return True
+            return RolloutCheckpointSaveResult(True)
 
         async def _exercise() -> None:
             with patch.object(
