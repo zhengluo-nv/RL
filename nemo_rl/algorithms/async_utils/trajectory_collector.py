@@ -27,7 +27,7 @@ import torch
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import PreTrainedTokenizerBase
 
-from nemo_rl.algorithms.grpo import MasterConfig
+from nemo_rl.algorithms.grpo import MasterConfig, get_pad_dynamic_image_shapes
 from nemo_rl.algorithms.opd import resolve_reference_aliases, teacher_seq_pad_multiple
 from nemo_rl.data.interfaces import DatumSpec
 from nemo_rl.data.multimodal_utils import PackedTensor
@@ -448,7 +448,11 @@ class AsyncTrajectoryCollector:
                 self._stamp_nemo_gym_task_indices(rollout_batch)
                 if self.master_config.grpo.deduplicate_multimodal_data:
                     attach_initial_nemo_gym_image_payloads(
-                        rollout_batch, self.processor
+                        rollout_batch,
+                        self.processor,
+                        pad_dynamic_image_shapes=get_pad_dynamic_image_shapes(
+                            self.master_config
+                        ),
                     )
             repeated_batch = rollout_batch.repeat_interleave(
                 num_generations,
