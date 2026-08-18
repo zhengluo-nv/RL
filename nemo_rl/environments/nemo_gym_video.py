@@ -24,6 +24,9 @@ from PIL import Image
 
 from nemo_rl.data.interfaces import TaskDataSpec
 from nemo_rl.data.multimodal_utils import (
+    AUDIO_CONTENT_TYPES,
+    IMAGE_CONTENT_TYPES,
+    VIDEO_CONTENT_TYPES,
     PackedTensor,
     extract_multimodal_model_inputs,
     get_dim_to_pack_along,
@@ -40,9 +43,6 @@ from nemo_rl.models.generation.vllm.video_utils import (
 )
 
 
-_VIDEO_CONTENT_TYPES = {"input_video", "video", "video_url"}
-_IMAGE_CONTENT_TYPES = {"input_image", "image", "image_url"}
-_AUDIO_CONTENT_TYPES = {"input_audio", "audio", "audio_url"}
 _VideoConfigValue = TypeVar("_VideoConfigValue")
 
 
@@ -101,8 +101,9 @@ def normalize_video_urls_in_examples(examples: list[dict[str, Any]]) -> None:
             if not isinstance(content, list):
                 continue
             for part in content:
-                if not isinstance(part, dict) or part.get("type") not in (
-                    _VIDEO_CONTENT_TYPES
+                if (
+                    not isinstance(part, dict)
+                    or part.get("type") not in VIDEO_CONTENT_TYPES
                 ):
                     continue
                 media_key = next(
@@ -158,13 +159,13 @@ def _extract_static_video_messages(
             part_type = part.get("type")
             if part_type == "input_text":
                 hf_content.append({"type": "text", "text": part["text"]})
-            elif part_type in _VIDEO_CONTENT_TYPES:
+            elif part_type in VIDEO_CONTENT_TYPES:
                 source = _get_content_part_url(part, "video_url", "video", "url")
                 if not source:
                     raise ValueError(f"{part_type} requires a non-empty video URL")
                 video_sources.append(source)
                 hf_content.append({"type": "video", "video": source})
-            elif part_type in _IMAGE_CONTENT_TYPES:
+            elif part_type in IMAGE_CONTENT_TYPES:
                 if not part.get("_is_video_frame"):
                     has_still_images = True
                     continue
@@ -184,7 +185,7 @@ def _extract_static_video_messages(
                         "_video_fps": part.get("_video_fps"),
                     }
                 )
-            elif part_type in _AUDIO_CONTENT_TYPES:
+            elif part_type in AUDIO_CONTENT_TYPES:
                 raise ValueError(
                     "The initial Gym video contract does not support audio or "
                     "audio+video inputs."
@@ -214,7 +215,7 @@ def _extract_static_video_messages(
                 f"received {len(video_sources)}."
             )
         frame_groups = {source for source in cached_frame_sources if source}
-        if len(frame_groups) > 1:
+        if len(frame_groups) != 1:
             raise ValueError(
                 "Gym video training requires cached frames from exactly one "
                 f"video per row; received {len(frame_groups)} sources."
