@@ -426,6 +426,10 @@ policy:
     # colocated CUDA-IPC refit to avoid a GPU -> CPU -> GPU round trip.
     real_quant_export_cpu_offload: true
     refit_cfg:
+      model_express:
+        server_url: null
+        staging_buffer_bytes: null
+        staging_buffers_count: 1
       nixl:
         update_weights_bucket_memory_ratio: 0.05
         device: cuda

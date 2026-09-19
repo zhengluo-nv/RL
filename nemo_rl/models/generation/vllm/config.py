@@ -37,7 +37,13 @@ from nemo_rl.models.generation.vllm.quantization.nvfp4_pertoken_config import (
 )
 
 VllmRefitTransportName = Literal["s3", "zmq"]
-VllmRefitSelector = Literal["vllm_s3_sparse", "vllm_zmq_sparse", "nixl", "nccl_reshard"]
+VllmRefitSelector = Literal[
+    "vllm_s3_sparse",
+    "vllm_zmq_sparse",
+    "nixl",
+    "nccl_reshard",
+    "model_express",
+]
 VLLM_SPARSE_REFIT_TRANSPORTS = frozenset({"vllm_s3_sparse", "vllm_zmq_sparse"})
 REFITTABLE_FP8_KV_CACHE_DTYPES = frozenset({"fp8", "fp8_e4m3"})
 
@@ -201,6 +207,13 @@ class VllmNixlRefitConfig(BaseModel, extra="forbid"):
     shard_expert_weights: bool = False
 
 
+class VllmModelExpressRefitConfig(BaseModel, extra="forbid"):
+    server_url: str | None = None
+    # None stages a full update; a byte limit enables MX bounded streaming.
+    staging_buffer_bytes: PositiveInt | None = None
+    staging_buffers_count: PositiveInt = 1
+
+
 class VllmCheckpointEnginePluginConfig(BaseModel, extra="allow"):
     update_weights_bucket_memory_ratio: Annotated[float, Field(gt=0, lt=1)] = 0.05
     release_after_refit: bool = False
@@ -209,6 +222,9 @@ class VllmCheckpointEnginePluginConfig(BaseModel, extra="allow"):
 class VllmRefitConfig(BaseModel, extra="allow"):
     sparse: VllmSparseRefitConfig = Field(default_factory=VllmSparseRefitConfig)
     nixl: VllmNixlRefitConfig = Field(default_factory=VllmNixlRefitConfig)
+    model_express: VllmModelExpressRefitConfig = Field(
+        default_factory=VllmModelExpressRefitConfig
+    )
 
 
 class VllmConfig(GenerationConfig):
@@ -500,7 +516,8 @@ def normalize_vllm_refit_config(config: VllmConfig) -> VllmRefitConfig | None:
     if transport not in get_args(VllmRefitSelector) and ":" not in transport:
         raise ValueError(
             f"Unknown vLLM refit transport {transport!r}: expected null, "
-            "'nccl_reshard', 'vllm_s3_sparse', 'vllm_zmq_sparse', 'nixl', or a "
+            "'nccl_reshard', 'vllm_s3_sparse', 'vllm_zmq_sparse', 'nixl', "
+            "'model_express', or a "
             "'module:ClassName' checkpoint-engine path."
         )
     # The encoder-cache reset is implemented only on the collective/IPC and

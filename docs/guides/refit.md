@@ -16,12 +16,64 @@ topology first, then select one transport with
 | `colocated.enabled: false` | `vllm_zmq_sparse` | Sparse delta over ZeroMQ | The link is bandwidth-limited and workers can reach a relay over TCP. |
 | `colocated.enabled: false` | `vllm_s3_sparse` | Sparse delta through S3 | Workers communicate through shared object storage. |
 | `colocated.enabled: false` | `nixl` | NIXL checkpoint engine | The cluster has a fast UCX/RDMA fabric for full-weight refit. |
+| `colocated.enabled: false` | `model_express` | ModelExpress versioned NIXL refit | A Megatron policy publishes native shards to vLLM through an MX trainer mesh. |
 
 `null` is the default. For non-colocated Megatron generation it selects the
 packed collective; Megatron's native refit must be selected explicitly with
 `mcore`. The sparse transports read only `refit_cfg.sparse`; NIXL reads only
 `refit_cfg.nixl`. Because one selector chooses the transport, sparse delta and
 NIXL cannot both be active.
+
+## ModelExpress
+
+The ModelExpress integration supports GRPO with a Megatron policy and
+non-colocated vLLM generation. Install the same ModelExpress revision in the
+controller, Megatron worker, and vLLM worker environments, and run a matching MX
+server. This integration requires the public trainer-mesh APIs
+(`create_trainer_mesh`, `TrainerTensorsMetadata`, and mesh-backed weight versions)
+and generator staging APIs available on ModelExpress main. Older source-slot
+APIs and the removed `ModelExpressVllmWorker` bootstrap hook are not used.
+
+```yaml
+policy:
+  offload_policy_before_refit: false
+  generation:
+    backend: vllm
+    colocated:
+      enabled: false
+    refit_transport: model_express
+    refit_cfg:
+      model_express:
+        server_url: mx-server:8001  # null uses MX server environment settings
+        staging_buffer_bytes: null  # null stages the complete local update
+        staging_buffers_count: 1  # use 2 to overlap bounded reads and installation
+```
+
+For bounded streaming, set `staging_buffer_bytes` to a positive capacity in
+bytes per receive arena. ModelExpress owns transfer planning, receiver buffers,
+verification, and vLLM installation. The optional arena count must be positive;
+two arenas can overlap reads and installation when bounded streaming is enabled.
+The framework uses the standard vLLM worker and initializes the MX generator
+client through its existing collective RPC extension.
+
+Each trainer binds its native Megatron tensors and returns its worker identity
+and `TrainerTensorsMetadata`. The controller registers every publisher in one
+trainer mesh, including redundant data-parallel replicas. Each synchronization
+creates a mesh-backed `FULL_TENSOR` weight version, publishes every trainer
+shard, checks readiness, and waits for every vLLM engine to finish installation
+before retiring the version and releasing trainer publications. The mesh is
+deleted when the synchronizer shuts down.
+
+Megatron publication explicitly uses `IN_PLACE`: NIXL reads the existing live
+parameter storage. Keep training quiesced until the synchronous refit returns;
+the trainer needs stable tensor addresses and must not mutate source weights
+while generators read them. MX owns its listeners through `MX_WORKER_HOST`,
+`MX_METADATA_PORT`, and `MX_WORKER_GRPC_PORT`; configure reachable addresses and
+non-conflicting port bases in the deployment manifest.
+
+Generated FP8 KV-cache scales and policy offload before refit are unsupported.
+GPU correctness and performance depend on the model, precision, and topology
+and require a separate end-to-end run; focused unit tests do not qualify them.
 
 ## vLLM Reload API
 

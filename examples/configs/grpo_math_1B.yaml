@@ -471,6 +471,10 @@ policy:
     # colocated CUDA-IPC refit to avoid a GPU -> CPU -> GPU round trip.
     real_quant_export_cpu_offload: true
     refit_cfg:
+      model_express:
+        server_url: null  # MX server address; null uses MX environment settings.
+        staging_buffer_bytes: null  # Positive bytes per receive arena; null stages a full update.
+        staging_buffers_count: 1  # Positive arena count; 2 overlaps bounded reads and installation.
       nixl:
         update_weights_bucket_memory_ratio: 0.05
         device: cuda

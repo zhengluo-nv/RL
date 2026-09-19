@@ -23,12 +23,44 @@ from nemo_rl.weight_sync.checkpoint_engine_config import (
 
 @pytest.mark.parametrize(
     "generation_config",
-    [{}, {"refit_transport": None}, {"refit_transport": "vllm_zmq_sparse"}],
+    [
+        {},
+        {"refit_transport": None},
+        {"refit_transport": "vllm_zmq_sparse"},
+        {"refit_transport": "model_express"},
+    ],
 )
 def test_checkpoint_engine_refit_config_returns_none_for_other_transports(
     generation_config,
 ):
     assert checkpoint_engine_refit_config(generation_config) is None
+
+
+def test_model_express_config_preserves_bounded_receive_settings():
+    from nemo_rl.models.generation.vllm.config import normalize_vllm_refit_config
+
+    config = normalize_vllm_refit_config(
+        {
+            "refit_transport": "model_express",
+            "refit_cfg": {
+                "model_express": {
+                    "staging_buffer_bytes": 1024,
+                    "staging_buffers_count": 2,
+                }
+            },
+        }
+    )
+
+    assert config.model_express.staging_buffer_bytes == 1024
+    assert config.model_express.staging_buffers_count == 2
+
+
+@pytest.mark.parametrize("field", ["staging_buffer_bytes", "staging_buffers_count"])
+def test_model_express_config_rejects_nonpositive_receive_settings(field):
+    from nemo_rl.models.generation.vllm.config import VllmModelExpressRefitConfig
+
+    with pytest.raises(ValueError):
+        VllmModelExpressRefitConfig(**{field: 0})
 
 
 def test_checkpoint_engine_refit_config_resolves_nixl_defaults():

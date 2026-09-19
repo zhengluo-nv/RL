@@ -15,7 +15,10 @@ import os
 import warnings
 from collections import defaultdict
 from contextlib import nullcontext
-from typing import Any, Iterable, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, Optional, Union
+
+if TYPE_CHECKING:
+    from modelexpress_rl import TrainerTensorsMetadata
 
 import numpy as np
 import ray
@@ -520,6 +523,35 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         )
         results = ray.get(futures)
         return results
+
+    def initialize_model_express(
+        self, *, server_url: str | None = None
+    ) -> dict[str, "TrainerTensorsMetadata"]:
+        """Bind every trainer and return MX worker identities and tensor metadata."""
+        bindings = self.run_all_workers_single_data(
+            "initialize_model_express", server_url=server_url
+        )
+        return {
+            worker_id: metadata
+            for binding in bindings
+            if binding is not None
+            for worker_id, metadata in binding.items()
+        }
+
+    def publish_model_express_version(self, version: Any) -> None:
+        """Publish one global version from every trainer rank."""
+        futures = self.worker_group.run_all_workers_single_data(
+            "publish_model_express_version", version=version
+        )
+        # Finish all publishers before the controller can retire a failed version.
+        ray.wait(futures, num_returns=len(futures))
+        ray.get(futures)
+
+    def release_model_express_version(self, version: Any) -> None:
+        """Withdraw every trainer shard after its version is retired."""
+        self.run_all_workers_single_data(
+            "release_model_express_version", version=version
+        )
 
     def init_collective(
         self,
